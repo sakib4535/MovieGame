@@ -1,0 +1,83 @@
+# Replace the image, create moviegame-secrets, and run the init Job before this Deployment.
+# Secrets: DATABASE_URL (managed PostgreSQL), REDIS_URL (managed Redis), RATE_SECRET, METRICS_TOKEN.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: moviegame}
+spec:
+  replicas: 3
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {app: moviegame}}
+  template:
+    metadata: {labels: {app: moviegame}}
+    spec:
+      terminationGracePeriodSeconds: 40
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, seccompProfile: {type: RuntimeDefault}}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: {matchLabels: {app: moviegame}}
+      containers:
+        - name: api
+          image: ghcr.io/YOUR_ORG/moviegame:1.0.0
+          ports: [{containerPort: 8000}]
+          envFrom: [{secretRef: {name: moviegame-secrets}}]
+          env:
+            - {name: APP_ENV, value: production}
+            - {name: DB_POOL_SIZE, value: '4'}
+            - {name: MAX_INFLIGHT, value: '64'}
+            # Set to the actual trusted ingress proxy CIDR when adding an ingress.
+            - {name: FORWARDED_ALLOW_IPS, value: '127.0.0.1'}
+          resources:
+            requests: {cpu: 500m, memory: 256Mi}
+            limits: {cpu: '2', memory: 512Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          readinessProbe: {httpGet: {path: /health/ready, port: 8000}, periodSeconds: 10, timeoutSeconds: 6}
+          livenessProbe: {httpGet: {path: /health/live, port: 8000}, periodSeconds: 15, timeoutSeconds: 5}
+          startupProbe: {httpGet: {path: /health/live, port: 8000}, periodSeconds: 5, failureThreshold: 30}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: moviegame}
+spec:
+  type: ClusterIP
+  selector: {app: moviegame}
+  ports: [{port: 80, targetPort: 8000}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: moviegame}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: moviegame}
+  minReplicas: 3
+  maxReplicas: 30
+  behavior:
+    scaleDown: {stabilizationWindowSeconds: 300}
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 65}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: moviegame}
+spec: {minAvailable: 2, selector: {matchLabels: {app: moviegame}}}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: moviegame-retention}
+spec:
+  schedule: '0 * * * *'
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: prune
+              image: ghcr.io/YOUR_ORG/moviegame:1.0.0
+              command: [python, -m, app.manage, prune]
+              envFrom: [{secretRef: {name: moviegame-secrets}}]
+              env: [{name: APP_ENV, value: production}, {name: DB_POOL_SIZE, value: '1'}]
+              resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: '1', memory: 256Mi}}

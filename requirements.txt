@@ -1,0 +1,11 @@
+fastapi==0.143.5
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.5
+psycopg[binary]==3.3.6
+redis==8.1.0
+prometheus-client==0.26.0
+Pillow==13.0.0
+
+uharfbuzz==0.56.3
+
+freetype-py==2.5.1
