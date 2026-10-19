@@ -5,10 +5,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def normalize_database_url(value):
+    """Use psycopg with standard PostgreSQL URLs supplied by hosted providers."""
+    for prefix in ('postgres://', 'postgresql://'):
+        if value.startswith(prefix):
+            return 'postgresql+psycopg://' + value[len(prefix):]
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     environment: str = os.getenv('APP_ENV', 'development')
-    database_url: str = os.getenv('DATABASE_URL', f'sqlite:///{ROOT / "moviegame.db"}')
+    database_url: str = normalize_database_url(os.getenv('DATABASE_URL', f'sqlite:///{ROOT / "moviegame.db"}'))
     redis_url: str = os.getenv('REDIS_URL', '')
     rate_secret: str = os.getenv('RATE_SECRET', 'local-development-only')
     metrics_token: str = os.getenv('METRICS_TOKEN', '')
